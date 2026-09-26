@@ -31,6 +31,7 @@ import {
 } from '../../protocol/ble-protocol';
 import BlePeripheral, { FramedChunkEvent } from '../../../modules/ble-peripheral';
 import { Buffer } from 'buffer';
+
 export type BleConnectionState =
   | 'IDLE'
   | 'REQUESTING_PERMISSIONS'
