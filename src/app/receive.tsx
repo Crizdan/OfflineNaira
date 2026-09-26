@@ -23,6 +23,10 @@ export default function ReceiveScreen() {
   const seenNonces = useRef(new Set<string>()).current;
 
   useEffect(() => {
+    // Silent return is correct here (unlike send.tsx's onSend guard) —
+    // this is a mount-time effect, not a user action, so there's no tap
+    // to give feedback about. _layout.tsx's ProvisioningGate should mean
+    // deviceId is already set by the time this screen can mount anyway.
     if (!deviceId || !publicKeyB64) return;
 
     const unsubState = ble.onStateChange(setStatus);

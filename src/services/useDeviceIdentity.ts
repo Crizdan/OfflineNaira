@@ -1,22 +1,24 @@
-import { useEffect, useState } from 'react';
-import { loadDeviceIdentity, provisionDeviceIdentity } from '../crypto/identity';
-import { initWallet } from '../db/walletRepository';
+import { useProvisioning } from './AppProvisioning';
 
+/**
+ * Thin compatibility wrapper: every screen already calls useDeviceIdentity()
+ * expecting { deviceId, publicKeyB64, offlineNairaId }. Rather than each
+ * screen independently re-running key generation and wallet init on every
+ * mount (the original bug's contributing factor — redundant, and masked
+ * failures behind identical-looking nulls), this now just reads the result
+ * of the ONE provisioning run in AppProvisioningProvider (see
+ * src/app/_layout.tsx). isLoading/error are exposed too, for screens that
+ * want to guard against acting on a not-yet-ready identity (see send.tsx,
+ * receive.tsx) — existing callers that only destructure the original three
+ * fields keep working unchanged.
+ */
 export function useDeviceIdentity() {
-  const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [publicKeyB64, setPublicKeyB64] = useState<string | null>(null);
-  const [offlineNairaId, setOfflineNairaId] = useState<string | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      let identity = await loadDeviceIdentity();
-      if (!identity) identity = await provisionDeviceIdentity();
-      await initWallet(identity.deviceId);
-      setDeviceId(identity.deviceId);
-      setPublicKeyB64(identity.publicKeyB64);
-      setOfflineNairaId(`ON-${identity.deviceId.slice(0, 4)}-${identity.deviceId.slice(4, 8)}`);
-    })();
-  }, []);
-
-  return { deviceId, publicKeyB64, offlineNairaId };
+  const { deviceId, publicKeyB64, offlineNairaId, status, error } = useProvisioning();
+  return {
+    deviceId,
+    publicKeyB64,
+    offlineNairaId,
+    isLoading: status === 'loading',
+    error: status === 'error' ? error : null,
+  };
 }

@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Text, View, StyleSheet } from 'react-native';
-import { Screen, Card, SectionLabel } from '../components/ui';
+import { Screen, Card, SectionLabel, PrimaryButton } from '../components/ui';
 import { colors, spacing, typography } from '../theme/theme';
 import { koboToNairaString } from '../domain/money';
 import { getWalletSnapshot, OFFLINE_LIMITS } from '../services/WalletService';
@@ -9,11 +9,32 @@ import { useDeviceIdentity } from '../services/useDeviceIdentity';
 export default function WalletScreen() {
   const { deviceId } = useDeviceIdentity();
   const [wallet, setWallet] = useState<Awaited<ReturnType<typeof getWalletSnapshot>> | null>(null);
+  // Previously a fetch failure and "still loading" looked identical (both
+  // rendered "Loading wallet…" forever, since the catch discarded the
+  // error and just set wallet to null — same state as before the fetch
+  // even started). Tracking the error explicitly fixes that.
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    if (!deviceId) return;
+    setError(null);
+    getWalletSnapshot(deviceId)
+      .then(setWallet)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load wallet'));
+  }, [deviceId]);
 
   useEffect(() => {
-    if (!deviceId) return;
-    getWalletSnapshot(deviceId).then(setWallet).catch(() => setWallet(null));
-  }, [deviceId]);
+    load();
+  }, [load]);
+
+  if (error) {
+    return (
+      <Screen>
+        <Text style={styles.errorText}>{error}</Text>
+        <PrimaryButton label="Try again" onPress={load} />
+      </Screen>
+    );
+  }
 
   if (!wallet) {
     return (
@@ -77,4 +98,5 @@ const styles = StyleSheet.create({
   rowValue: { ...typography.body, color: colors.textPrimary, fontWeight: '600' },
   note: { ...typography.caption, color: colors.textMuted, marginTop: spacing.md },
   empty: { ...typography.body, color: colors.textMuted },
+  errorText: { ...typography.body, color: colors.danger, marginBottom: spacing.md },
 });

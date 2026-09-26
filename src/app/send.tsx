@@ -19,7 +19,17 @@ export default function SendScreen() {
   const [busy, setBusy] = useState(false);
 
   const onSend = async () => {
-    if (!deviceId || !publicKeyB64) return;
+    if (!deviceId || !publicKeyB64) {
+      // Shouldn't be reachable — _layout.tsx's ProvisioningGate blocks
+      // every screen from mounting until identity is ready — but this
+      // stays as a hard safety net rather than silently doing nothing,
+      // in case that invariant is ever broken by a future change.
+      Alert.alert(
+        'Wallet not ready',
+        'Your device identity is still being set up. Please wait a moment and try again.',
+      );
+      return;
+    }
     setBusy(true);
     setStatus(null);
     try {
