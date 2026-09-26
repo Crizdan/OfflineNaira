@@ -1,8 +1,8 @@
-import { registerRootComponent } from 'expo';
+// Custom entry point: needed only because tweetnacl requires a real
+// crypto.getRandomValues, which Hermes/React Native doesn't provide by
+// default. This polyfill MUST be imported before anything else touches
+// tweetnacl (directly or via src/crypto/identity.ts).
+import 'react-native-get-random-values';
 
-import App from './App';
-
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
-registerRootComponent(App);
+// Hands off to Expo Router, which reads src/app/_layout.tsx as the root.
+import 'expo-router/entry';
