@@ -16,14 +16,13 @@
         "NSBluetoothAlwaysUsageDescription": "Offline Naira uses Bluetooth to send and receive payments with nearby phones when there's no internet connection."
       }
     },
-    "android": {
+        "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#0B0E14",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B0E14"
       },
-      "predictiveBackGestureEnabled": false,
+      "predictiveBackGestureEnabled": false
+    },
       "permissions": [
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.BLUETOOTH_ADVERTISE",

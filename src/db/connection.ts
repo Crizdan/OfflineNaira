@@ -14,7 +14,9 @@ let openPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 async function openAndInitialize(): Promise<SQLite.SQLiteDatabase> {
   const db = await SQLite.openDatabaseAsync('offline_naira.db');
   await db.execAsync('PRAGMA journal_mode = WAL;');
+  await db.execAsync('PRAGMA foreign_keys = OFF;');
   await db.execAsync(SCHEMA_SQL);
+  await db.execAsync('PRAGMA foreign_keys = ON;');
   return db;
 }
 
