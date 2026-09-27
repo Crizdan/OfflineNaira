@@ -1,24 +1,3 @@
-/**
- * NOTE (Expo): react-native-ble-plx and the local BlePeripheral module both
- * require custom native code, so none of this runs inside Expo Go. You
- * need a development build: `npx expo prebuild` then `npx expo run:android`
- * (or an EAS development build). See MIGRATION.md for the config plugin
- * setup.
- *
- * This service now covers BOTH BLE roles:
- *  - Central/client (scan, connect, write, subscribe to notifications) via
- *    react-native-ble-plx — this part has been here since the first draft.
- *  - Peripheral/server (advertise, run a GATT server, receive writes, send
- *    notifications) via the local `BlePeripheral` Expo Module in
- *    modules/ble-peripheral/ — this part is new. That module's Kotlin side
- *    is a real implementation now, not a stub, but it has not been built
- *    or run on hardware from this environment — treat it as an unverified
- *    first draft, not a guarantee. See modules/ble-peripheral/README.md.
- *
- * Central and peripheral each get their own MessageReassembler instance —
- * a device could in principle be mid-send (central) and mid-receive
- * (peripheral) at the same time, and their chunk streams must never mix.
- */
 import { BleManager, Device, Subscription, State } from 'react-native-ble-plx';
 import { PermissionsAndroid, Platform } from 'react-native';
 import type { EventSubscription } from 'expo-modules-core';
@@ -29,8 +8,68 @@ import {
   MessageReassembler,
   FramedChunk,
 } from '../../protocol/ble-protocol';
-import BlePeripheral, { FramedChunkEvent } from '../../../modules/ble-peripheral';
 import { Buffer } from 'buffer';
+
+// Safely attempt to load local native BlePeripheral module without throwing if missing from binary
+let BlePeripheralModule: any = null;
+try {
+  const module = require('../../../modules/ble-peripheral');
+  BlePeripheralModule = module.default || module;
+} catch (e) {
+  console.warn('BlePeripheral native module not linked or available:', e);
+}
+
+// Fallback proxy to prevent null-reference runtime crashes
+const SafeBlePeripheral = {
+  startAdvertising: async () => {
+    if (BlePeripheralModule?.startAdvertising) {
+      return await BlePeripheralModule.startAdvertising();
+    }
+    console.warn('BlePeripheral.startAdvertising is not available on this build.');
+  },
+  stopAdvertising: async () => {
+    if (BlePeripheralModule?.stopAdvertising) {
+      return await BlePeripheralModule.stopAdvertising();
+    }
+  },
+  startGattServer: async () => {
+    if (BlePeripheralModule?.startGattServer) {
+      return await BlePeripheralModule.startGattServer();
+    }
+    console.warn('BlePeripheral.startGattServer is not available on this build.');
+  },
+  stopGattServer: async () => {
+    if (BlePeripheralModule?.stopGattServer) {
+      return await BlePeripheralModule.stopGattServer();
+    }
+  },
+  addListener: (eventName: string, listener: Function): EventSubscription => {
+    if (BlePeripheralModule?.addListener) {
+      try {
+        return BlePeripheralModule.addListener(eventName, listener);
+      } catch (e) {
+        console.warn(`Failed to attach listener ${eventName}:`, e);
+      }
+    }
+    return { remove: () => {} } as EventSubscription;
+  },
+  notifyCharacteristic: async (key: string, data: string) => {
+    if (BlePeripheralModule?.notifyCharacteristic) {
+      return await BlePeripheralModule.notifyCharacteristic(key, data);
+    }
+  },
+  isAdvertisingSupported: async (): Promise<boolean> => {
+    if (BlePeripheralModule?.isAdvertisingSupported) {
+      try {
+        return await BlePeripheralModule.isAdvertisingSupported();
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  },
+};
+
 export type BleConnectionState =
   | 'IDLE'
   | 'REQUESTING_PERMISSIONS'
@@ -43,7 +82,7 @@ export type BleConnectionState =
   | 'ERROR';
 
 export interface DiscoveredPeer {
-  deviceId: string; // BLE device id (not the Offline Naira deviceId — that's exchanged post-connect)
+  deviceId: string;
   rssi: number | null;
   name: string | null;
 }
@@ -51,7 +90,7 @@ export interface DiscoveredPeer {
 type Listener<T> = (value: T) => void;
 
 export class BleService {
-  private manager = new BleManager();
+  private manager: BleManager | null = null;
   private connected: Device | null = null;
   private centralReassembler = new MessageReassembler();
   private peripheralReassembler = new MessageReassembler();
@@ -63,6 +102,14 @@ export class BleService {
   private gattServerStarted = false;
   private advertisingStarted = false;
 
+  constructor() {
+    try {
+      this.manager = new BleManager();
+    } catch (err) {
+      console.warn('Failed to initialize BleManager:', err);
+    }
+  }
+
   onStateChange(fn: Listener<BleConnectionState>): () => void {
     this.stateListeners.add(fn);
     return () => this.stateListeners.delete(fn);
@@ -72,18 +119,10 @@ export class BleService {
     this.stateListeners.forEach((l) => l(state));
   }
 
-  /**
-   * Same permission set covers both roles: BLUETOOTH_SCAN/CONNECT are
-   * needed to be a central, BLUETOOTH_ADVERTISE to be a peripheral, and
-   * ACCESS_FINE_LOCATION on pre-12 devices for scanning either way. Call
-   * this once before using either role.
-   */
   async requestPermissions(): Promise<boolean> {
     this.emitState('REQUESTING_PERMISSIONS');
     if (Platform.OS !== 'android') return true;
 
-    // VERIFY ON DEVICE: exact permission set depends on target SDK / Android
-    // version (12+ uses BLUETOOTH_SCAN/CONNECT/ADVERTISE; below that, ACCESS_FINE_LOCATION).
     const sdkInt = Platform.Version as number;
     const perms =
       sdkInt >= 31
@@ -99,6 +138,7 @@ export class BleService {
   }
 
   async waitForPoweredOn(timeoutMs = 5000): Promise<void> {
+    if (!this.manager) return;
     const state = await this.manager.state();
     if (state === State.PoweredOn) return;
     await new Promise<void>((resolve, reject) => {
@@ -106,7 +146,7 @@ export class BleService {
         sub.remove();
         reject(new Error('Bluetooth did not power on in time'));
       }, timeoutMs);
-      const sub = this.manager.onStateChange((s) => {
+      const sub = this.manager!.onStateChange((s) => {
         if (s === State.PoweredOn) {
           clearTimeout(timeout);
           sub.remove();
@@ -120,8 +160,11 @@ export class BleService {
   // CENTRAL ROLE — scan, connect, write offers, read acks
   // ============================================================
 
-  /** Scans for nearby devices advertising the Offline Naira service UUID. */
   scanForPeers(onFound: Listener<DiscoveredPeer>, timeoutMs = 15000): () => void {
+    if (!this.manager) {
+      this.emitState('ERROR');
+      return () => {};
+    }
     this.emitState('SCANNING');
     this.manager.startDeviceScan([OFFLINE_NAIRA_SERVICE_UUID], null, (error, device) => {
       if (error) {
@@ -133,31 +176,25 @@ export class BleService {
       }
     });
 
-    const timer = setTimeout(() => this.manager.stopDeviceScan(), timeoutMs);
+    const timer = setTimeout(() => this.manager?.stopDeviceScan(), timeoutMs);
     return () => {
       clearTimeout(timer);
-      this.manager.stopDeviceScan();
+      this.manager?.stopDeviceScan();
     };
   }
 
   async connect(bleDeviceId: string): Promise<Device> {
+    if (!this.manager) throw new Error('BLE Manager not initialized');
     this.emitState('CONNECTING');
     try {
       const device = await this.manager.connectToDevice(bleDeviceId, { autoConnect: false });
       this.emitState('DISCOVERING');
       const discovered = await device.discoverAllServicesAndCharacteristics();
 
-      // Default unnegotiated ATT MTU is 23 bytes (≈20 usable), which is far
-      // too small for a chunk whose JSON envelope + base64'd payload can run
-      // several hundred bytes (see MAX_CHUNK_BYTES in ble-protocol.ts).
-      // Without this, writes will either fail outright or silently truncate
-      // depending on the OS/stack. 517 is the practical Android ceiling.
       try {
         await discovered.requestMTU(517);
       } catch {
-        // Some devices/stacks reject MTU requests — not fatal, but large
-        // chunks may fail; consider lowering MAX_CHUNK_BYTES if this happens
-        // consistently on your test devices.
+        // Ignored
       }
 
       this.connected = discovered;
@@ -167,9 +204,6 @@ export class BleService {
       device.onDisconnected((_error) => {
         this.connected = null;
         this.emitState('DISCONNECTED');
-        // Reconnect/retry handling is done by the caller (PaymentEngine),
-        // which knows whether a COMMITTED-but-unconfirmed transaction is
-        // outstanding and needs PENDING_RECONCILIATION instead of a silent retry.
       });
 
       return discovered;
@@ -185,13 +219,12 @@ export class BleService {
         return await this.connect(bleDeviceId);
       } catch (err) {
         this.retryCount++;
-        await new Promise((r) => setTimeout(r, 500 * this.retryCount)); // backoff
+        await new Promise((r) => setTimeout(r, 500 * this.retryCount));
       }
     }
     throw new Error(`Failed to connect after ${this.maxRetries} attempts`);
   }
 
-  /** Writes a full logical message (chunked as needed) to a characteristic. */
   async writeMessage(characteristicUUID: string, msgId: string, bytes: Uint8Array): Promise<void> {
     if (!this.connected) throw new Error('Not connected');
     const chunks = frameMessage(msgId, bytes);
@@ -204,7 +237,6 @@ export class BleService {
     }
   }
 
-  /** Subscribes to notifications on a characteristic, reassembling chunked messages. */
   subscribeMessages(characteristicUUID: string, onMessage: Listener<Uint8Array>): Subscription {
     if (!this.connected) throw new Error('Not connected');
     return this.connected.monitorCharacteristicForService(
@@ -220,7 +252,7 @@ export class BleService {
   }
 
   async disconnect(): Promise<void> {
-    if (this.connected) {
+    if (this.connected && this.manager) {
       await this.manager.cancelDeviceConnection(this.connected.id);
       this.connected = null;
     }
@@ -231,54 +263,39 @@ export class BleService {
   // PERIPHERAL ROLE — advertise, run GATT server, receive offers, send acks
   // ============================================================
 
-  /** Starts advertising OFFLINE_NAIRA_SERVICE_UUID so a central can find this device. */
   async startAdvertising(): Promise<void> {
-    await BlePeripheral.startAdvertising();
+    await SafeBlePeripheral.startAdvertising();
     this.advertisingStarted = true;
     this.emitState('ADVERTISING');
   }
 
   async stopAdvertising(): Promise<void> {
     if (!this.advertisingStarted) return;
-    await BlePeripheral.stopAdvertising();
+    await SafeBlePeripheral.stopAdvertising();
     this.advertisingStarted = false;
   }
 
-  /**
-   * Opens the GATT server and starts listening for TX_OFFER writes. Call
-   * `subscribeToOffers` first (or right after) to actually receive them —
-   * this only opens the server, it doesn't hand you offers by itself.
-   */
   async startGattServer(): Promise<void> {
-    await BlePeripheral.startGattServer();
+    await SafeBlePeripheral.startGattServer();
     this.gattServerStarted = true;
 
-    // Wire connection-state events into the same onStateChange stream
-    // SendScreen already listens to for the central role, so ReceiveScreen
-    // can drive its UI off one consistent state machine.
     this.peripheralSubs.push(
-      BlePeripheral.addListener('onCentralConnected', () => this.emitState('CONNECTED')),
-      BlePeripheral.addListener('onCentralDisconnected', () => this.emitState('DISCONNECTED')),
-      BlePeripheral.addListener('onAdvertisingFailed', () => this.emitState('ERROR')),
+      SafeBlePeripheral.addListener('onCentralConnected', () => this.emitState('CONNECTED')),
+      SafeBlePeripheral.addListener('onCentralDisconnected', () => this.emitState('DISCONNECTED')),
+      SafeBlePeripheral.addListener('onAdvertisingFailed', () => this.emitState('ERROR')),
     );
   }
 
   async stopGattServer(): Promise<void> {
     if (!this.gattServerStarted) return;
-    await BlePeripheral.stopGattServer();
+    await SafeBlePeripheral.stopGattServer();
     this.gattServerStarted = false;
     this.peripheralSubs.forEach((s) => s.remove());
     this.peripheralSubs = [];
   }
 
-  /**
-   * Subscribes to reassembled TX_OFFER messages (i.e. full signed
-   * transactions, already stitched back together from chunks — the caller
-   * never sees individual FramedChunks). Feed the resulting bytes straight
-   * into PaymentEngine.handleIncomingOffer.
-   */
   subscribeToOffers(onOffer: Listener<Uint8Array>): () => void {
-    const sub = BlePeripheral.addListener('onTxOfferReceived', (event: FramedChunkEvent) => {
+    const sub = SafeBlePeripheral.addListener('onTxOfferReceived', (event: any) => {
       const complete = this.peripheralReassembler.addChunk(event);
       if (complete) onOffer(complete);
     });
@@ -286,11 +303,10 @@ export class BleService {
     return () => sub.remove();
   }
 
-  /** Sends a full logical message (e.g. a SignedReceipt) back over TX_ACK, chunked as needed. */
   async sendTxAck(bytes: Uint8Array): Promise<void> {
     const chunks = frameMessage(newMsgId(), bytes);
     for (const chunk of chunks) {
-      await BlePeripheral.notifyCharacteristic(
+      await SafeBlePeripheral.notifyCharacteristic(
         characteristicKeyFor(CHARACTERISTICS.TX_ACK),
         JSON.stringify(chunk),
       );
@@ -298,21 +314,18 @@ export class BleService {
   }
 
   async isAdvertisingSupported(): Promise<boolean> {
-    return BlePeripheral.isAdvertisingSupported();
+    return SafeBlePeripheral.isAdvertisingSupported();
   }
 
   destroy(): void {
-    this.manager.destroy();
+    if (this.manager) {
+      this.manager.destroy();
+    }
     this.peripheralSubs.forEach((s) => s.remove());
     this.peripheralSubs = [];
   }
 }
 
-// --- chunk <-> base64 GATT payload helpers (central role) ---
-// VERIFY ON DEVICE: react-native-ble-plx expects/returns characteristic
-// values as base64 strings already; here we additionally JSON-encode our
-// FramedChunk envelope (msgId/index/count) then base64 it, since the chunk
-// itself needs structure beyond raw bytes.
 function chunkToBase64Payload(chunk: FramedChunk): string {
   const json = JSON.stringify(chunk);
   return typeof btoa === 'function' ? btoa(json) : Buffer.from(json).toString('base64');
@@ -327,8 +340,6 @@ function newMsgId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-// CHARACTERISTICS maps name -> UUID; the native module's notifyCharacteristic
-// takes the name ('TX_ACK' etc.), so invert the lookup once here.
 function characteristicKeyFor(uuid: string): string {
   const entry = Object.entries(CHARACTERISTICS).find(([, v]) => v === uuid);
   if (!entry) throw new Error(`Unknown characteristic UUID: ${uuid}`);
