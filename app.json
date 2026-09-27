@@ -22,47 +22,41 @@
         "backgroundColor": "#0B0E14"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.crizdan77.offline"
+      "package": "com.crizdan77.offline",
+      "permissions": [
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_ADVERTISE",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN"
+      ]
     },
-    "permissions": [
-      "android.permission.BLUETOOTH_SCAN",
-      "android.permission.BLUETOOTH_ADVERTISE",
-      "android.permission.BLUETOOTH_CONNECT",
-      "android.permission.ACCESS_FINE_LOCATION",
-      "android.permission.BLUETOOTH",
-      "android.permission.BLUETOOTH_ADMIN"
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store",
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": [
+            "peripheral",
+            "central"
+          ],
+          "bluetoothAlwaysPermission": "Allow Offline Naira to connect to nearby phones over Bluetooth"
+        }
+      ]
     ],
-    "package": "com.crizdan77.offline",
     "extra": {
+      "router": {},
       "eas": {
         "projectId": "71d44ecb-5713-4533-9247-c77b47885cd8"
       }
-    }
-  },
-  "web": {
-    "favicon": "./assets/favicon.png",
-    "bundler": "metro"
-  },
-  "plugins": [
-    "expo-router",
-    "expo-sqlite",
-    "expo-secure-store",
-    [
-      "react-native-ble-plx",
-      {
-        "isBackgroundEnabled": false,
-        "modes": [
-          "peripheral",
-          "central"
-        ],
-        "bluetoothAlwaysPermission": "Allow $(PRODUCT_NAME) to connect to nearby phones over Bluetooth"
-      }
-    ]
-  ],
-  "extra": {
-    "router": {},
-    "eas": {
-      "projectId": "71d44ecb-5713-4533-9247-c77b47885cd8"
     }
   }
 }

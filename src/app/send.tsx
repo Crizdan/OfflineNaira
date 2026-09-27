@@ -8,7 +8,6 @@ import { PaymentEngine } from '../services/PaymentEngine';
 import { BleService } from '../services/ble/BleService';
 import { WalletError } from '../services/WalletService';
 
-// One shared BLE service instance for the app lifetime; injected here for clarity.
 const ble = new BleService();
 
 export default function SendScreen() {
@@ -20,19 +19,24 @@ export default function SendScreen() {
 
   const onSend = async () => {
     if (!deviceId || !publicKeyB64) {
-      // Shouldn't be reachable — _layout.tsx's ProvisioningGate blocks
-      // every screen from mounting until identity is ready — but this
-      // stays as a hard safety net rather than silently doing nothing,
-      // in case that invariant is ever broken by a future change.
       Alert.alert(
         'Wallet not ready',
         'Your device identity is still being set up. Please wait a moment and try again.',
       );
       return;
     }
+
+    // Guard: Request permissions before starting Bluetooth
+    const granted = await ble.requestPermissions();
+    if (!granted) {
+      Alert.alert('Bluetooth permissions required', 'Enable Bluetooth permissions in Settings to send payments.');
+      return;
+    }
+
     setBusy(true);
     setStatus(null);
     try {
+      await ble.waitForPoweredOn();
       const amountKobo = nairaToKobo(amount);
       const engine = new PaymentEngine(ble, deviceId, publicKeyB64);
       const result = await engine.sendPayment(peerId.trim(), amountKobo);
@@ -92,9 +96,7 @@ export default function SendScreen() {
       )}
 
       <Text style={styles.note}>
-        This device must be connected over BLE to the recipient first (peer discovery is driven
-        from the Receive screen's advertiser role). Peripheral advertising requires the native
-        Expo module in modules/ble-peripheral — see MIGRATION.md.
+        This device must be connected over BLE to the recipient first. Share your device ID or scan nearby devices.
       </Text>
     </Screen>
   );
