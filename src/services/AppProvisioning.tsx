@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { initializeDatabase } from '../db/connection';
 import { loadDeviceIdentity, provisionDeviceIdentity, DeviceIdentity } from '../crypto/identity';
 import { initWallet } from '../db/walletRepository';
+import { ensureDeviceRegistered } from '../db/deviceRepository';
 
 type ProvisioningStatus = 'loading' | 'ready' | 'error';
 
@@ -11,26 +12,11 @@ interface ProvisioningState {
   publicKeyB64: string | null;
   offlineNairaId: string | null;
   error: string | null;
-  /** Re-runs provisioning from scratch. Wire this to a "Try again" button. */
   retry: () => void;
 }
 
 const ProvisioningContext = createContext<ProvisioningState | null>(null);
 
-/**
- * Runs once at app startup: opens/creates the SQLite database, then loads
- * or generates the device's Ed25519 identity, then ensures a wallet row
- * exists for it. Every screen reads the result from context instead of
- * re-running this itself — previously each screen's own useDeviceIdentity
- * call redundantly repeated all of this on every mount.
- *
- * The critical property this adds that was missing before: a real
- * loading/error distinction. Previously, "still setting up" and
- * "permanently failed" both looked identical to the UI — null forever,
- * with the failure silently swallowed as an unhandled promise rejection.
- * Now a failure surfaces as status: 'error' with a message and a retry
- * button, instead of an infinite spinner.
- */
 export function AppProvisioningProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<ProvisioningStatus>('loading');
   const [identity, setIdentity] = useState<DeviceIdentity | null>(null);
@@ -48,6 +34,13 @@ export function AppProvisioningProvider({ children }: { children: React.ReactNod
         deviceIdentity = await provisionDeviceIdentity();
       }
 
+      // Step 1: Register user & device in SQLite FIRST
+      await ensureDeviceRegistered(
+        deviceIdentity.deviceId,
+        deviceIdentity.publicKeyB64
+      );
+
+      // Step 2: Now initWallet will succeed because the parent device row exists!
       await initWallet(deviceIdentity.deviceId);
 
       setIdentity(deviceIdentity);
@@ -76,7 +69,11 @@ export function AppProvisioningProvider({ children }: { children: React.ReactNod
     retry,
   };
 
-  return <ProvisioningContext.Provider value={value}>{children}</ProvisioningContext.Provider>;
+  return (
+    <ProvisioningContext.Provider value={value}>
+      {children}
+    </ProvisioningContext.Provider>
+  );
 }
 
 export function useProvisioning(): ProvisioningState {
