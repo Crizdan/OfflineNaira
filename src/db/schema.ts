@@ -10,7 +10,7 @@
  * stored/compared in plaintext.
  */
 export const SCHEMA_SQL = `
-PRAGMA foreign_keys = ON;
+
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
