@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Text, View, StyleSheet, FlatList } from 'react-native';
+import { Text, View, StyleSheet, FlatList, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Screen, Card, SectionLabel, PrimaryButton, StatusPill } from '../components/ui';
-import { colors, spacing, typography } from '../theme/theme';
-import { koboToNairaString } from '../domain/money';
-import { getWalletSnapshot } from '../services/WalletService';
-import { getHistory } from '../db/transactionRepository';
-import { useDeviceIdentity } from '../services/useDeviceIdentity';
+import { Screen, Card, SectionLabel, PrimaryButton, StatusPill } from '../../src/components/ui';
+import { colors, spacing, typography } from '../../src/theme/theme';
+import { koboToNairaString } from '../../src/domain/money';
+import { getWalletSnapshot } from '../../src/services/WalletService';
+import { getHistory, insertDemoDeposit } from '../../src/db/transactionRepository';
+import { useDeviceIdentity } from '../../src/services/useDeviceIdentity';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -16,11 +16,28 @@ export default function HomeScreen() {
   );
   const [recent, setRecent] = useState<any[]>([]);
 
-  useEffect(() => {
+  const refreshData = () => {
     if (!deviceId) return;
     getWalletSnapshot(deviceId).then(setWallet).catch(() => setWallet(null));
     getHistory(5).then(setRecent).catch(() => setRecent([]));
+  };
+
+  useEffect(() => {
+    refreshData();
   }, [deviceId]);
+
+  const handleTestTopUp = async () => {
+    try {
+      // ₦10,000 = 1,000,000 Kobo
+      const testKobo = 1000000;
+      await insertDemoDeposit(testKobo);
+      refreshData();
+      Alert.alert('Success', 'Added ₦10,000 demo funds to your wallet!');
+    } catch (error) {
+      console.error('Failed to add demo funds:', error);
+      Alert.alert('Error', 'Could not add demo funds to local database.');
+    }
+  };
 
   return (
     <Screen>
@@ -36,6 +53,14 @@ export default function HomeScreen() {
           Bank balance: {wallet ? koboToNairaString(wallet.bankBalanceKobo as any) : '—'}
         </Text>
       </Card>
+
+      {/* Developer Demo Top-Up Button */}
+      <View style={styles.actionsRow}>
+        <PrimaryButton
+          label="+ Top Up ₦10,000 (Demo Funds)"
+          onPress={handleTestTopUp}
+        />
+      </View>
 
       <View style={styles.actionsRow}>
         <PrimaryButton label="Send" onPress={() => router.push('/send')} />

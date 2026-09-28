@@ -101,3 +101,16 @@ export async function getHistory(limit = 50): Promise<any[]> {
   const db = await getDb();
   return db.getAllAsync<any>('SELECT * FROM transactions ORDER BY created_at DESC LIMIT ?', [limit]);
 }
+export async function insertDemoDeposit(amountKobo: number): Promise<void> {
+  const db = await getDb();
+  const txId = `demo_topup_${Date.now()}`;
+  const now = Date.now();
+ 
+  await db.runAsync(
+    `INSERT INTO transactions
+       (tx_id, direction, counterparty_device_id, amount_kobo, state, protocol_version,
+        nonce, created_at, expires_at, received_at, synced)
+     VALUES (?, 'RECEIVED', 'SYSTEM_TOPUP', ?, 'COMMITTED', 1, ?, ?, ?, ?, 0)`,
+    [txId, amountKobo, `nonce_${now}`, now, now + 86400000, now],
+  );
+}
