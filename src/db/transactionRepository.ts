@@ -105,7 +105,6 @@ export async function insertDemoDeposit(amountKobo: number, targetDeviceId?: str
   const now = Date.now();
   const txId = `demo_topup_${now}`;
  
-  // Use the actual device ID passed in, or fallback to 'LOCAL_WALLET'
   const receiver = targetDeviceId || 'LOCAL_WALLET';
 
   const mockSignedTx = {
@@ -119,5 +118,13 @@ export async function insertDemoDeposit(amountKobo: number, targetDeviceId?: str
     expiresAt: now + 86400000,
   } as SignedTransaction;
 
+  // 1. Save the transaction record (shows in history)
   await insertIncoming(mockSignedTx, 'COMMITTED' as TxState);
+
+  // 2. Update the actual wallet balance (shows on the card)
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE wallet SET offline_wallet_kobo = offline_wallet_kobo + ? WHERE device_id = ?',
+    [amountKobo, receiver]
+  );
 }
