@@ -105,10 +105,13 @@ export async function insertDemoDeposit(amountKobo: number, targetDeviceId?: str
   const now = Date.now();
   const txId = `demo_topup_${now}`;
  
+  // Use the actual device ID passed in, or fallback to 'LOCAL_WALLET'
+  const receiver = targetDeviceId || 'LOCAL_WALLET';
+
   const mockSignedTx = {
     txId,
     senderDeviceId: 'BANK_GATEWAY',
-    receiverDeviceId: targetDeviceId || 'LOCAL_WALLET',
+    receiverDeviceId: receiver,
     amountKobo: amountKobo as any,
     protocolVersion: 1,
     nonce: `nonce_${now}`,
