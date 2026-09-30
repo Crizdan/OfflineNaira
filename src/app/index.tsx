@@ -30,7 +30,7 @@ export default function HomeScreen() {
     try {
       // ₦10,000 = 1,000,000 Kobo
       const testKobo = 1000000;
-      await insertDemoDeposit(testKobo);
+      await insertDemoDeposit(testKobo, deviceId ?? undefined);
       refreshData();
       Alert.alert('Success', 'Added ₦10,000 demo funds to your wallet!');
     } catch (error) {

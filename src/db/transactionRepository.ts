@@ -101,14 +101,14 @@ export async function getHistory(limit = 50): Promise<any[]> {
   const db = await getDb();
   return db.getAllAsync<any>('SELECT * FROM transactions ORDER BY created_at DESC LIMIT ?', [limit]);
 }
-export async function insertDemoDeposit(amountKobo: number): Promise<void> {
+export async function insertDemoDeposit(amountKobo: number, targetDeviceId?: string): Promise<void> {
   const now = Date.now();
   const txId = `demo_topup_${now}`;
  
   const mockSignedTx = {
     txId,
-    senderDeviceId: 'SYSTEM_TOPUP',
-    receiverDeviceId: 'SELF',
+    senderDeviceId: 'BANK_GATEWAY',
+    receiverDeviceId: targetDeviceId || 'LOCAL_WALLET',
     amountKobo: amountKobo as any,
     protocolVersion: 1,
     nonce: `nonce_${now}`,
