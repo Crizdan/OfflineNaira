@@ -59,9 +59,19 @@ export class PaymentEngine {
 
       state = advance(state, 'OFFERED');
       await TxRepo.updateState(txId, state, { offeredAt: Date.now() });
-      await this.offerOverBle(signed);
+      // Subscribe to TX_ACK BEFORE writing the offer. The receiver answers
+      // the moment the last chunk lands; if our notification subscription
+      // (a CCCD write) is queued after the offer, the receipt can be sent
+      // into a not-yet-enabled characteristic and be lost.
+      const receiptListener = this.listenForReceipt(txId, 30_000);
+      try {
+        await this.offerOverBle(signed);
+      } catch (offerErr) {
+        receiptListener.cancel();
+        throw offerErr;
+      }
 
-      const receipt = await this.waitForReceipt(txId, 30_000);
+      const receipt = await receiptListener.promise;
       if (!receipt) {
         return await this.failOutstanding(txId, amountKobo, 'TIMEOUT', 'no_receipt_before_timeout');
       }
@@ -127,8 +137,12 @@ export class PaymentEngine {
     await this.ble.writeMessage(CHARACTERISTICS.TX_OFFER, signed.txId, bytes);
   }
 
-  private waitForReceipt(txId: string, timeoutMs: number): Promise<SignedReceipt | null> {
-    return new Promise((resolve) => {
+  private listenForReceipt(
+    txId: string,
+    timeoutMs: number,
+  ): { promise: Promise<SignedReceipt | null>; cancel: () => void } {
+    let cancel: () => void = () => {};
+    const promise = new Promise<SignedReceipt | null>((resolve) => {
       const timer = setTimeout(() => {
         sub.remove();
         resolve(null);
@@ -146,7 +160,14 @@ export class PaymentEngine {
           // ignore malformed frame, keep waiting until timeout
         }
       });
+
+      cancel = () => {
+        clearTimeout(timer);
+        sub.remove();
+        resolve(null);
+      };
     });
+    return { promise, cancel };
   }
 
   /**

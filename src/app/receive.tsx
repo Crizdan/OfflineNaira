@@ -4,11 +4,8 @@ import { Screen, Card, SectionLabel } from '../components/ui';
 import { colors, spacing, typography } from '../theme/theme';
 import { useDeviceIdentity } from '../services/useDeviceIdentity';
 import { PaymentEngine } from '../services/PaymentEngine';
-import { BleService, BleConnectionState } from '../services/ble/BleService';
-
-// Same shared instance SendScreen uses — one BleService per app lifetime,
-// since it owns the single BluetoothLeAdvertiser/GattServer/BleManager.
-const ble = new BleService();
+import type { BleConnectionState } from '../services/ble/BleService';
+import { ble } from '../services/ble/bleInstance';
 
 export default function ReceiveScreen() {
   const { deviceId, publicKeyB64, offlineNairaId } = useDeviceIdentity();

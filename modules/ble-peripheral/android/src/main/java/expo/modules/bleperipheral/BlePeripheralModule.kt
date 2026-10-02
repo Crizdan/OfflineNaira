@@ -17,6 +17,8 @@ import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import expo.modules.kotlin.Promise
@@ -66,6 +68,23 @@ class BlePeripheralModule : Module() {
   private var gattServer: BluetoothGattServer? = null
   private var connectedDevice: BluetoothDevice? = null
   private var txAckNotificationsEnabled = false
+
+  // addService() and notifyCharacteristicChanged() are both ASYNCHRONOUS on
+  // Android: they return true when the request is *queued*, and the real
+  // result arrives later in onServiceAdded / onNotificationSent. The promises
+  // below are held open until those callbacks fire, so JS only proceeds
+  // (e.g. starts advertising, or sends the next receipt chunk) once the
+  // stack has actually finished the previous step.
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private var pendingServiceAddPromise: Promise? = null
+  private var pendingNotifyPromise: Promise? = null
+
+  private fun rejectPending(reason: String) {
+    pendingServiceAddPromise?.reject("GATT_STOPPED", reason, null)
+    pendingServiceAddPromise = null
+    pendingNotifyPromise?.reject("GATT_STOPPED", reason, null)
+    pendingNotifyPromise = null
+  }
 
   override fun definition() = ModuleDefinition {
     Name("BlePeripheral")
@@ -196,6 +215,14 @@ class BlePeripheralModule : Module() {
     }
 
     try {
+      // A second startGattServer() without a stop would orphan the first
+      // BluetoothGattServer handle (leaked slot). Close it first.
+      gattServer?.close()
+      gattServer = null
+      connectedDevice = null
+      txAckNotificationsEnabled = false
+      rejectPending("GATT server restarted")
+
       val server = manager.openGattServer(context, gattServerCallback)
       if (server == null) {
         promise.reject("GATT_SERVER_FAILED", "openGattServer returned null.", null)
@@ -225,11 +252,22 @@ class BlePeripheralModule : Module() {
       service.addCharacteristic(txOfferChar)
       service.addCharacteristic(txAckChar)
 
+      pendingServiceAddPromise = promise
       if (!server.addService(service)) {
+        pendingServiceAddPromise = null
         promise.reject("GATT_SERVICE_FAILED", "Failed to queue the Offline Naira GATT service for registration.", null)
         return
       }
-      promise.resolve(null)
+      // NOT resolved here: addService only *queues* registration. Resolving
+      // now let JS start advertising before the service existed, so a
+      // central could connect and run service discovery against an empty
+      // GATT table. The promise is resolved in onServiceAdded below.
+      mainHandler.postDelayed({
+        if (pendingServiceAddPromise === promise) {
+          pendingServiceAddPromise = null
+          promise.reject("GATT_SERVICE_TIMEOUT", "onServiceAdded never fired within 5s.", null)
+        }
+      }, 5000)
     } catch (e: SecurityException) {
       promise.reject("PERMISSION_DENIED", e.message ?: "SecurityException while starting the GATT server", e)
     }
@@ -242,6 +280,7 @@ class BlePeripheralModule : Module() {
       gattServer = null
       connectedDevice = null
       txAckNotificationsEnabled = false
+      rejectPending("GATT server stopped")
       promise.resolve(null)
     } catch (e: SecurityException) {
       promise.reject("PERMISSION_DENIED", e.message ?: "SecurityException while stopping the GATT server", e)
@@ -259,6 +298,7 @@ class BlePeripheralModule : Module() {
     advertiser = null
     gattServer = null
     connectedDevice = null
+    rejectPending("Module destroyed")
   }
 
   // ---------- sending a notification (one already-framed chunk) ----------
@@ -293,18 +333,34 @@ class BlePeripheralModule : Module() {
       return
     }
 
+    if (pendingNotifyPromise != null) {
+      promise.reject("BUSY", "A previous notification is still being sent; await it first.", null)
+      return
+    }
+
     try {
       // chunkJson is already a complete FramedChunk JSON string built by
       // frameMessage() in ble-protocol.ts — set it as the raw GATT value
       // verbatim, no re-parsing or re-encoding needed on this side.
       characteristic.value = chunkJson.toByteArray(Charsets.UTF_8)
+      pendingNotifyPromise = promise
       val notified = server.notifyCharacteristicChanged(device, characteristic, false)
       if (!notified) {
+        pendingNotifyPromise = null
         promise.reject("NOTIFY_FAILED", "notifyCharacteristicChanged returned false.", null)
         return
       }
-      promise.resolve(null)
+      // Resolved in onNotificationSent. Firing the next chunk before the
+      // stack reports the previous one sent makes Android silently drop it —
+      // and a receipt is always 2+ chunks.
+      mainHandler.postDelayed({
+        if (pendingNotifyPromise === promise) {
+          pendingNotifyPromise = null
+          promise.reject("NOTIFY_TIMEOUT", "onNotificationSent never fired within 3s.", null)
+        }
+      }, 3000)
     } catch (e: SecurityException) {
+      pendingNotifyPromise = null
       promise.reject("PERMISSION_DENIED", e.message ?: "SecurityException while notifying TX_ACK", e)
     }
   }
@@ -312,6 +368,27 @@ class BlePeripheralModule : Module() {
   // ---------- GATT server callback ----------
 
   private val gattServerCallback = object : BluetoothGattServerCallback() {
+
+    override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+      if (service.uuid != SERVICE_UUID) return
+      val p = pendingServiceAddPromise ?: return
+      pendingServiceAddPromise = null
+      if (status == BluetoothGatt.GATT_SUCCESS) {
+        p.resolve(null)
+      } else {
+        p.reject("GATT_SERVICE_FAILED", "onServiceAdded reported GATT status $status", null)
+      }
+    }
+
+    override fun onNotificationSent(device: BluetoothDevice, status: Int) {
+      val p = pendingNotifyPromise ?: return
+      pendingNotifyPromise = null
+      if (status == BluetoothGatt.GATT_SUCCESS) {
+        p.resolve(null)
+      } else {
+        p.reject("NOTIFY_FAILED", "onNotificationSent reported GATT status $status", null)
+      }
+    }
 
     override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
       when (newState) {
