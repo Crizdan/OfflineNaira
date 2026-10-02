@@ -13,31 +13,30 @@ export default function ReceiveScreen() {
   const [ready, setReady] = useState(false);
 
   // In-memory replay cache for this session — validateSignedTransaction
-  // checks incoming nonces against this Set. It's separate from the
-  // persistent seen_nonces table that insertIncoming() writes to; a
-  // hardened build would seed this Set from that table on mount so replay
-  // protection survives an app restart, not just this session.
+  // checks incoming nonces against this Set.
   const seenNonces = useRef(new Set<string>()).current;
 
   useEffect(() => {
-    // Silent return is correct here (unlike send.tsx's onSend guard) —
-    // this is a mount-time effect, not a user action, so there's no tap
-    // to give feedback about. _layout.tsx's ProvisioningGate should mean
-    // deviceId is already set by the time this screen can mount anyway.
     if (!deviceId || !publicKeyB64) return;
 
-    const unsubState = ble.onStateChange(setStatus);
-    const engine = new PaymentEngine(ble, deviceId, publicKeyB64);
+    let unsubState: (() => void) | null = null;
     let unsubOffers: (() => void) | null = null;
     let cancelled = false;
 
     (async () => {
-      const granted = await ble.requestPermissions();
-      if (!granted) {
-        Alert.alert('Bluetooth permissions required', 'Enable Bluetooth permissions in Settings to receive payments.');
-        return;
-      }
       try {
+        unsubState = ble.onStateChange(setStatus);
+        const engine = new PaymentEngine(ble, deviceId, publicKeyB64);
+
+        const granted = await ble.requestPermissions();
+        if (!granted) {
+          Alert.alert(
+            'Bluetooth permissions required',
+            'Enable Bluetooth permissions in Settings to receive payments.'
+          );
+          return;
+        }
+
         await ble.waitForPoweredOn();
         await ble.startGattServer();
         await ble.startAdvertising();
@@ -45,18 +44,25 @@ export default function ReceiveScreen() {
 
         unsubOffers = ble.subscribeToOffers((bytes) => {
           engine.handleIncomingOffer(bytes, seenNonces).catch((err) => {
-            Alert.alert('Failed to process incoming payment', err instanceof Error ? err.message : 'Unknown error');
+            Alert.alert(
+              'Failed to process incoming payment',
+              err instanceof Error ? err.message : 'Unknown error'
+            );
           });
         });
         setReady(true);
       } catch (err) {
-        Alert.alert('Could not start receiving', err instanceof Error ? err.message : 'Unknown error');
+        console.warn('BLE Peripheral initialization failed:', err);
+        Alert.alert(
+          'BLE Not Ready',
+          'Could not start BLE receiver. Ensure Bluetooth is enabled and that the newly built APK is installed on this device.'
+        );
       }
     })();
 
     return () => {
       cancelled = true;
-      unsubState();
+      unsubState?.();
       unsubOffers?.();
       ble.stopAdvertising().catch(() => {});
       ble.stopGattServer().catch(() => {});
@@ -66,7 +72,7 @@ export default function ReceiveScreen() {
   const statusText: Record<BleConnectionState, string> = {
     IDLE: 'Not started',
     REQUESTING_PERMISSIONS: 'Requesting Bluetooth permissions…',
-    SCANNING: 'Scanning', // not used in this screen, but BleConnectionState is shared with the central role
+    SCANNING: 'Scanning',
     CONNECTING: 'Connecting',
     DISCOVERING: 'Discovering',
     CONNECTED: 'Connected — a sender is talking to this device',
@@ -89,9 +95,8 @@ export default function ReceiveScreen() {
       </Card>
 
       <Text style={styles.note}>
-        This device is advertising and running a GATT server via the native BlePeripheral module
-        (modules/ble-peripheral/) — real logic, not yet verified on hardware. Share your Offline
-        Naira ID with the sender, or let their device discover you directly over Bluetooth.
+        This device is advertising and running a GATT server via the native BlePeripheral module.
+        Share your Offline Naira ID with the sender, or let their device discover you directly over Bluetooth.
       </Text>
     </Screen>
   );

@@ -18,35 +18,38 @@ export default function SendScreen() {
 
   const onSend = async () => {
     if (!deviceId || !publicKeyB64) {
-      // Shouldn't be reachable — _layout.tsx's ProvisioningGate blocks
-      // every screen from mounting until identity is ready — but this
-      // stays as a hard safety net rather than silently doing nothing,
-      // in case that invariant is ever broken by a future change.
       Alert.alert(
         'Wallet not ready',
-        'Your device identity is still being set up. Please wait a moment and try again.',
+        'Your device identity is still being set up. Please wait a moment and try again.'
       );
       return;
     }
+
     setBusy(true);
     setStatus(null);
     let connected = false;
+
     try {
       const amountKobo = nairaToKobo(amount);
 
-      // Connect BEFORE touching the wallet. Previously this screen went
-      // straight to sendPayment() without ever scanning or connecting, so the
-      // BLE write threw "Not connected" - after funds were already reserved
-      // and the transaction recorded as PENDING_RECONCILIATION. A failure to
-      // reach the other phone should leave the wallet untouched.
       setPhase('Requesting Bluetooth permissions...');
-      if (!(await ble.requestPermissions())) {
-        Alert.alert('Bluetooth permission needed', 'Allow Nearby devices / Location permission, then try again.');
+      const granted = await ble.requestPermissions().catch((e) => {
+        console.warn('Permission check failed:', e);
+        return false;
+      });
+
+      if (!granted) {
+        Alert.alert(
+          'Permissions required',
+          'Allow Bluetooth and Location access in Settings to send offline payments.'
+        );
         return;
       }
+
+      setPhase('Checking Bluetooth state...');
       await ble.waitForPoweredOn();
 
-      setPhase('Looking for the receiving phone...');
+      setPhase('Looking for receiving phone...');
       await ble.connectToNearestPeer();
       connected = true;
 
@@ -54,14 +57,21 @@ export default function SendScreen() {
       const engine = new PaymentEngine(ble, deviceId, publicKeyB64);
       const result = await engine.sendPayment(peerId.trim(), amountKobo);
       setStatus(result.finalState);
+
       if (result.finalState !== 'CONFIRMED' && result.finalState !== 'COMMITTED') {
         Alert.alert('Send did not complete', result.failureReason ?? result.finalState);
       }
     } catch (err) {
+      console.error('Send error:', err);
       if (err instanceof WalletError) {
         Alert.alert('Cannot send', err.message);
       } else {
-        Alert.alert('Error', err instanceof Error ? err.message : 'Unknown error');
+        Alert.alert(
+          'Connection Failed',
+          err instanceof Error
+            ? err.message
+            : 'Could not connect to receiving device. Ensure Bluetooth & Location are ON and the receiver is on the Receive screen.'
+        );
       }
     } finally {
       if (connected) await ble.disconnect().catch(() => {});
@@ -113,8 +123,7 @@ export default function SendScreen() {
       )}
 
       <Text style={styles.note}>
-        The other phone must be on its Receive screen with Bluetooth on. This phone scans for it,
-        connects, sends the signed offer and waits for its signed receipt.
+        The other phone must be on its Receive screen with Bluetooth and Location turned on.
       </Text>
     </Screen>
   );
