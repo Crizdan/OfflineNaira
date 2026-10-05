@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { colors, spacing, typography } from '../theme/theme';
 import { AppProvisioningProvider, useProvisioning } from '../services/AppProvisioning';
 import { PrimaryButton } from '../components/ui';
+import { AuthGate } from '../components/AuthGate';
 
 // This file is the Expo Router equivalent of the old App.tsx / RootNavigator.
 // Expo Router owns the app's entry point (see index.ts, loaded via
@@ -24,21 +25,23 @@ export default function RootLayout() {
       <StatusBar style="light" />
       <AppProvisioningProvider>
         <ProvisioningGate>
-          <Stack
-            screenOptions={{
-              headerStyle: { backgroundColor: colors.bgSurface },
-              headerTintColor: colors.textPrimary,
-              contentStyle: { backgroundColor: colors.bgPrimary },
-            }}
-          >
-            <Stack.Screen name="index" options={{ title: 'Offline Naira' }} />
-            <Stack.Screen name="wallet" options={{ title: 'Wallet' }} />
-            <Stack.Screen name="send" options={{ title: 'Send' }} />
-            <Stack.Screen name="receive" options={{ title: 'Receive' }} />
-            <Stack.Screen name="history" options={{ title: 'History' }} />
-            <Stack.Screen name="settings" options={{ title: 'Settings' }} />
-            <Stack.Screen name="sync" options={{ title: 'Sync' }} />
-          </Stack>
+          <AuthGate>
+            <Stack
+              screenOptions={{
+                headerStyle: { backgroundColor: colors.bgSurface },
+                headerTintColor: colors.textPrimary,
+                contentStyle: { backgroundColor: colors.bgPrimary },
+              }}
+            >
+              <Stack.Screen name="index" options={{ title: 'Offline Naira' }} />
+              <Stack.Screen name="wallet" options={{ title: 'Wallet' }} />
+              <Stack.Screen name="send" options={{ title: 'Send' }} />
+              <Stack.Screen name="receive" options={{ title: 'Receive' }} />
+              <Stack.Screen name="history" options={{ title: 'History' }} />
+              <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+              <Stack.Screen name="sync" options={{ title: 'Sync' }} />
+            </Stack>
+          </AuthGate>
         </ProvisioningGate>
       </AppProvisioningProvider>
     </>
@@ -46,11 +49,11 @@ export default function RootLayout() {
 }
 
 /**
- * Blocks the whole app behind identity/wallet setup completing — no screen
- * ever mounts with a null deviceId while setup is silently still running
- * (the previous failure mode). A real failure shows an error and a retry
- * button instead of an infinite "Loading wallet…"/"Not yet provisioned".
- */
+* Blocks the whole app behind identity/wallet setup completing — no screen
+* ever mounts with a null deviceId while setup is silently still running
+* (the previous failure mode). A real failure shows an error and a retry
+* button instead of an infinite "Loading wallet…"/"Not yet provisioned".
+*/
 function ProvisioningGate({ children }: { children: React.ReactNode }) {
   const { status, error, retry } = useProvisioning();
 

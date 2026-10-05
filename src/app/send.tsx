@@ -7,9 +7,11 @@ import { useDeviceIdentity } from '../services/useDeviceIdentity';
 import { PaymentEngine } from '../services/PaymentEngine';
 import { ble } from '../services/ble/bleInstance';
 import { WalletError } from '../services/WalletService';
+import { useTransactionAuthorization } from '../components/TransactionAuth';
 
 export default function SendScreen() {
   const { deviceId, publicKeyB64 } = useDeviceIdentity();
+  const { authorize, pinPrompt } = useTransactionAuthorization();
   const [peerId, setPeerId] = useState('');
   const [amount, setAmount] = useState('');
   const [status, setStatus] = useState<string | null>(null);
@@ -22,6 +24,12 @@ export default function SendScreen() {
         'Wallet not ready',
         'Your device identity is still being set up. Please wait a moment and try again.'
       );
+      return;
+    }
+
+    // Prompt for Biometrics or PIN before starting BLE/transfer flow
+    const authorized = await authorize('Authorize Offline Send');
+    if (!authorized) {
       return;
     }
 
@@ -125,6 +133,8 @@ export default function SendScreen() {
       <Text style={styles.note}>
         The other phone must be on its Receive screen with Bluetooth and Location turned on.
       </Text>
+
+      {pinPrompt}
     </Screen>
   );
 }

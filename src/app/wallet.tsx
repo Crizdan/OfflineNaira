@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Text, View, StyleSheet } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { Screen, Card, SectionLabel, PrimaryButton } from '../components/ui';
 import { colors, spacing, typography } from '../theme/theme';
 import { koboToNairaString } from '../domain/money';
@@ -9,10 +10,6 @@ import { useDeviceIdentity } from '../services/useDeviceIdentity';
 export default function WalletScreen() {
   const { deviceId } = useDeviceIdentity();
   const [wallet, setWallet] = useState<Awaited<ReturnType<typeof getWalletSnapshot>> | null>(null);
-  // Previously a fetch failure and "still loading" looked identical (both
-  // rendered "Loading wallet…" forever, since the catch discarded the
-  // error and just set wallet to null — same state as before the fetch
-  // even started). Tracking the error explicitly fixes that.
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -23,9 +20,12 @@ export default function WalletScreen() {
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load wallet'));
   }, [deviceId]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  // Re-runs automatically every time the Wallet screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   if (error) {
     return (

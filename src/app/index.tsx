@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Text, View, StyleSheet, FlatList, Alert } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Screen, Card, SectionLabel, PrimaryButton, StatusPill } from '../../src/components/ui';
 import { colors, spacing, typography } from '../../src/theme/theme';
 import { koboToNairaString } from '../../src/domain/money';
@@ -16,15 +16,18 @@ export default function HomeScreen() {
   );
   const [recent, setRecent] = useState<any[]>([]);
 
-  const refreshData = () => {
+  const refreshData = useCallback(() => {
     if (!deviceId) return;
     getWalletSnapshot(deviceId).then(setWallet).catch(() => setWallet(null));
     getHistory(5).then(setRecent).catch(() => setRecent([]));
-  };
-
-  useEffect(() => {
-    refreshData();
   }, [deviceId]);
+
+  // Re-runs automatically every time the Home screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      refreshData();
+    }, [refreshData])
+  );
 
   const handleTestTopUp = async () => {
     try {

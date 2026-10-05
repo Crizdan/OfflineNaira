@@ -1,9 +1,9 @@
 /**
- * PaymentEngine orchestrates a single transaction through the state
- * machine, calling WalletService for every balance change and
- * TransactionRepository for every persistence step. Screens call
- * PaymentEngine, never the pieces underneath directly.
- */
+* PaymentEngine orchestrates a single transaction through the state
+* machine, calling WalletService for every balance change and
+* TransactionRepository for every persistence step. Screens call
+* PaymentEngine, never the pieces underneath directly.
+*/
 import { Kobo } from '../domain/money';
 import {
   buildUnsignedTransaction,
@@ -35,7 +35,7 @@ export class PaymentEngine {
 
   /**
    * Full sender-side flow: CREATED -> SIGNED -> OFFERED -> (wait for receipt)
-   * -> COMMITTED -> CONFIRMED, with reservation/release around it and
+   * -> ACCEPTED -> COMMITTED -> CONFIRMED, with reservation/release around it and
    * PENDING_RECONCILIATION as the safety net if BLE drops mid-flow.
    */
   async sendPayment(receiverDeviceId: string, amountKobo: Kobo): Promise<SendResult> {
@@ -96,6 +96,9 @@ export class PaymentEngine {
       }
 
       // Receiver ACCEPTED and (by protocol) has already COMMITTED locally.
+      state = advance(state, 'ACCEPTED');
+      await TxRepo.updateState(txId, state);
+
       state = advance(state, 'COMMITTED');
       await TxRepo.updateState(txId, state, { committedAt: Date.now() });
       await WalletService.commitReservedSend(this.myDeviceId, amountKobo);

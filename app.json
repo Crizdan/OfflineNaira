@@ -40,6 +40,7 @@
       "expo-router",
       "expo-sqlite",
       "expo-secure-store",
+      "expo-local-authentication",
       [
         "react-native-ble-plx",
         {
