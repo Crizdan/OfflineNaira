@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "./index.ts",
   "dependencies": {
+    "ble-peripheral": "file:modules/ble-peripheral",
     "buffer": "^6.0.3",
     "expo": "~57.0.22",
     "expo-constants": "~57.0.19",
@@ -37,5 +38,11 @@
     "typecheck": "tsc --noEmit",
     "test": "jest"
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
+  }
 }
+

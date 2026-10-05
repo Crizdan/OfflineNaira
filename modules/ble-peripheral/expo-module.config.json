@@ -1,6 +1,11 @@
 {
-  "platforms": ["android"],
+  "platforms": [
+    "android"
+  ],
   "android": {
-    "modules": ["expo.modules.bleperipheral.BlePeripheralModule"]
+    "package": "expo.modules.bleperipheral",
+    "modules": [
+      "expo.modules.bleperipheral.BlePeripheralModule"
+    ]
   }
 }
