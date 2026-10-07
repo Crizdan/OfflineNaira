@@ -1,11 +1,5 @@
 /**
-* NOTE (Expo): react-native-ble-plx and the local BlePeripheral module both
-* require custom native code, so none of this runs inside Expo Go. You
-* need a development build: `npx expo prebuild` then `npx expo run:android`
-* (or an EAS development build). See MIGRATION.md for the config plugin
-* setup.
-*
-* This service covers BOTH BLE roles:
+* BleService handles both BLE roles:
 *  - Central/client via react-native-ble-plx
 *  - Peripheral/server via local `BlePeripheral` Expo Module
 */
@@ -20,7 +14,7 @@ import {
   MessageReassembler,
   FramedChunk,
 } from '../../protocol/ble-protocol';
-import BlePeripheral, { FramedChunkEvent } from '../../../modules/ble-peripheral';
+import BlePeripheral from '../../../modules/ble-peripheral';
 
 export type BleConnectionState =
   | 'IDLE'
@@ -54,10 +48,6 @@ export class BleService {
   private gattServerStarted = false;
   private advertisingStarted = false;
 
-  /**
-   * Lazy getter for BleManager. Prevents class instantiation from crashing
-   * on import if the native module is unavailable on the device.
-   */
   private get manager(): BleManager {
     if (!this._manager) {
       try {
@@ -72,7 +62,6 @@ export class BleService {
     return this._manager;
   }
 
-  /** Safety check to ensure the custom native BlePeripheral Expo module exists */
   private checkPeripheralModule(): void {
     if (!BlePeripheral) {
       throw new Error(
@@ -352,7 +341,7 @@ export class BleService {
       return () => {};
     }
 
-    const sub = BlePeripheral.addListener('onTxOfferReceived', (event: FramedChunkEvent) => {
+    const sub = BlePeripheral.addListener('onTxOfferReceived', (event: FramedChunk) => {
       const complete = this.peripheralReassembler.addChunk(event);
       if (complete) onOffer(complete);
     });
@@ -399,14 +388,13 @@ export class BleService {
   }
 }
 
-// --- chunk <-> base64 GATT payload helpers (central role) ---
 function chunkToBase64Payload(chunk: FramedChunk): string {
   const json = JSON.stringify(chunk);
-  return typeof btoa === 'function' ? btoa(json) : Buffer.from(json).toString('base64');
+  return Buffer.from(json).toString('base64');
 }
 
 function base64PayloadToChunk(payload: string): FramedChunk {
-  const json = typeof atob === 'function' ? atob(payload) : Buffer.from(payload, 'base64').toString();
+  const json = Buffer.from(payload, 'base64').toString('utf-8');
   return JSON.parse(json) as FramedChunk;
 }
 
@@ -419,7 +407,9 @@ function newMsgId(): string {
 }
 
 function characteristicKeyFor(uuid: string): string {
-  const entry = Object.entries(CHARACTERISTICS).find(([, v]) => v === uuid);
+  const entry = Object.entries(CHARACTERISTICS).find(
+    ([, v]) => v.toLowerCase() === uuid.toLowerCase(),
+  );
   if (!entry) throw new Error(`Unknown characteristic UUID: ${uuid}`);
   return entry[0];
 }

@@ -1,8 +1,7 @@
 /**
 * PaymentEngine orchestrates a single transaction through the state
 * machine, calling WalletService for every balance change and
-* TransactionRepository for every persistence step. Screens call
-* PaymentEngine, never the pieces underneath directly.
+* TransactionRepository for every persistence step.
 */
 import { Kobo } from '../domain/money';
 import {
@@ -33,11 +32,6 @@ export class PaymentEngine {
     private myPublicKeyB64: string,
   ) {}
 
-  /**
-   * Full sender-side flow: CREATED -> SIGNED -> OFFERED -> (wait for receipt)
-   * -> ACCEPTED -> COMMITTED -> CONFIRMED, with reservation/release around it and
-   * PENDING_RECONCILIATION as the safety net if BLE drops mid-flow.
-   */
   async sendPayment(receiverDeviceId: string, amountKobo: Kobo): Promise<SendResult> {
     const txId = newTxId();
     let state: TxState = 'CREATED';
@@ -59,10 +53,7 @@ export class PaymentEngine {
 
       state = advance(state, 'OFFERED');
       await TxRepo.updateState(txId, state, { offeredAt: Date.now() });
-      // Subscribe to TX_ACK BEFORE writing the offer. The receiver answers
-      // the moment the last chunk lands; if our notification subscription
-      // (a CCCD write) is queued after the offer, the receipt can be sent
-      // into a not-yet-enabled characteristic and be lost.
+
       const receiptListener = this.listenForReceipt(txId, 30_000);
       try {
         await this.offerOverBle(signed);
@@ -80,10 +71,6 @@ export class PaymentEngine {
         return await this.failOutstanding(txId, amountKobo, 'FAILED', 'bad_receipt_signature');
       }
 
-      // verifyReceipt only proves the receipt is internally self-consistent
-      // (signature matches its own embedded deviceId/pubkey pair) — it
-      // doesn't prove it came from the device this payment was actually
-      // meant for. Check that explicitly.
       if (receipt.receiverDeviceId !== receiverDeviceId) {
         return await this.failOutstanding(txId, amountKobo, 'FAILED', 'receipt_from_wrong_device');
       }
@@ -95,7 +82,6 @@ export class PaymentEngine {
         return { txId, finalState: state, failureReason: receipt.reason };
       }
 
-      // Receiver ACCEPTED and (by protocol) has already COMMITTED locally.
       state = advance(state, 'ACCEPTED');
       await TxRepo.updateState(txId, state);
 
@@ -125,9 +111,6 @@ export class PaymentEngine {
   ): Promise<SendResult> {
     await TxRepo.updateState(txId, finalState, { failureReason: reason });
     if (finalState === 'PENDING_RECONCILIATION') {
-      // Do NOT release the reservation locally — we don't know if the
-      // receiver actually committed before the drop. The backend resolves
-      // this deterministically by tx_id during sync (see backend/app/routers/reconciliation.py).
       await TxRepo.markPendingSettlement(txId, 'ble_interrupted_send');
     } else {
       await WalletService.releaseReservation(this.myDeviceId, amountKobo);
@@ -160,7 +143,7 @@ export class PaymentEngine {
             resolve(receipt);
           }
         } catch {
-          // ignore malformed frame, keep waiting until timeout
+          // ignore malformed frame, keep waiting
         }
       });
 
@@ -173,10 +156,6 @@ export class PaymentEngine {
     return { promise, cancel };
   }
 
-  /**
-   * Receiver-side flow, called when TX_OFFER arrives:
-   * RECEIVED -> VALIDATED -> ACCEPTED -> COMMITTED, then sends a signed receipt.
-   */
   async handleIncomingOffer(rawBytes: Uint8Array, seenNonces: Set<string>): Promise<void> {
     const signed = JSON.parse(new TextDecoder().decode(rawBytes)) as SignedTransaction;
     let state: TxState = 'RECEIVED';
@@ -203,7 +182,6 @@ export class PaymentEngine {
     state = advance(state, 'ACCEPTED');
     await TxRepo.updateState(signed.txId, state);
 
-    // Credit is PENDING until backend settlement — see WalletService.creditPendingReceive.
     await WalletService.creditPendingReceive(this.myDeviceId, signed.amountKobo);
 
     state = advance(state, 'COMMITTED');
@@ -219,12 +197,6 @@ export class PaymentEngine {
     await this.sendReceipt(receipt);
   }
 
-  /**
-   * The receiver is the BLE peripheral, not the central — sending a
-   * receipt back means notifying over TX_ACK (this.ble.sendTxAck), not
-   * writing (this.ble.writeMessage, which assumes a central-role
-   * connection and would throw "Not connected" here).
-   */
   private async sendReceipt(receipt: SignedReceipt): Promise<void> {
     const bytes = new TextEncoder().encode(JSON.stringify(receipt));
     await this.ble.sendTxAck(bytes);

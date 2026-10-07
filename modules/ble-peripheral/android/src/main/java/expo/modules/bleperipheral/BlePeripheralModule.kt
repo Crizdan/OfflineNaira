@@ -28,32 +28,12 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * BLE peripheral role for Offline Naira: advertising + a GATT server with
- * TX_OFFER (write, central -> this device) and TX_ACK (notify, this
- * device -> central) characteristics.
- *
- * Design note: this module does NOT chunk outgoing messages or reassemble
- * incoming ones — that logic lives once, in JS
- * (src/protocol/ble-protocol.ts's frameMessage/MessageReassembler), shared
- * by both the central and peripheral roles in BleService.ts. Native's job
- * is purely the GATT plumbing: relay each already-framed chunk out as a
- * notification, and parse just enough of each incoming write to hand the
- * chunk's fields to JS as an event. Keeping the framing logic in one
- * language avoids exactly the kind of hand-synced-in-two-places drift
- * flagged in docs/LIMITATIONS.md for the transaction signing format.
- *
- * UUIDs below MUST exactly match src/protocol/ble-protocol.ts.
- *
- * Not yet run on hardware. Things most likely to need adjustment once you
- * do: OEM-specific advertising payload limits on some Android skins, and
- * confirming the negotiated MTU (requested from the central side in
- * BleService.connect) is actually honored before the first chunk write —
- * if a central writes before MTU negotiation completes, a 180-byte chunk
- * can be silently truncated by the stack.
- */
-private val SERVICE_UUID: UUID = UUID.fromString("7e9a0001-0000-1000-8000-00805f9b34fb")
-private val CHAR_TX_OFFER: UUID = UUID.fromString("7e9a0003-0000-1000-8000-00805f9b34fb")
-private val CHAR_TX_ACK: UUID = UUID.fromString("7e9a0004-0000-1000-8000-00805f9b34fb")
+* True 128-bit vendor-specific UUIDs (avoids Bluetooth SIG Base UUID collision).
+* MUST match src/protocol/ble-protocol.ts
+*/
+private val SERVICE_UUID: UUID = UUID.fromString("7e9a0001-a1b2-4c3d-8e5f-90123456789a")
+private val CHAR_TX_OFFER: UUID = UUID.fromString("7e9a0003-a1b2-4c3d-8e5f-90123456789a")
+private val CHAR_TX_ACK: UUID = UUID.fromString("7e9a0004-a1b2-4c3d-8e5f-90123456789a")
 private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
 class BlePeripheralModule : Module() {
@@ -69,12 +49,6 @@ class BlePeripheralModule : Module() {
   private var connectedDevice: BluetoothDevice? = null
   private var txAckNotificationsEnabled = false
 
-  // addService() and notifyCharacteristicChanged() are both ASYNCHRONOUS on
-  // Android: they return true when the request is *queued*, and the real
-  // result arrives later in onServiceAdded / onNotificationSent. The promises
-  // below are held open until those callbacks fire, so JS only proceeds
-  // (e.g. starts advertising, or sends the next receipt chunk) once the
-  // stack has actually finished the previous step.
   private val mainHandler = Handler(Looper.getMainLooper())
   private var pendingServiceAddPromise: Promise? = null
   private var pendingNotifyPromise: Promise? = null
@@ -108,12 +82,6 @@ class BlePeripheralModule : Module() {
   }
 
   // ---------- permissions ----------
-  // JS is expected to have already requested these via PermissionsAndroid
-  // (BleService.requestPermissions) before calling into this module. These
-  // checks are a safety net, not a substitute for that — a native module
-  // has no clean way to drive the Android runtime permission dialog itself
-  // without an Activity result launcher, which Expo modules don't give you
-  // directly.
 
   private fun hasPermission(permission: String): Boolean =
     ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
@@ -153,13 +121,19 @@ class BlePeripheralModule : Module() {
       .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
       .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
       .setConnectable(true)
+      .setTimeout(0)
       .build()
 
-    // Keep the advertisement itself small (just the service UUID) — device
-    // identity is exchanged after connection, not broadcast.
-    val data = AdvertiseData.Builder()
+    // Primary advertisement data (Service UUID only to stay under 31 bytes)
+    val advertiseData = AdvertiseData.Builder()
       .setIncludeDeviceName(false)
+      .setIncludeTxPowerLevel(false)
       .addServiceUuid(ParcelUuid(SERVICE_UUID))
+      .build()
+
+    // Scan response data (Provides device name on scan request)
+    val scanResponseData = AdvertiseData.Builder()
+      .setIncludeDeviceName(true)
       .build()
 
     var resolved = false
@@ -181,7 +155,8 @@ class BlePeripheralModule : Module() {
     }
 
     try {
-      leAdvertiser.startAdvertising(settings, data, callback)
+      // Use 4-parameter startAdvertising to ensure cross-chipset compatibility
+      leAdvertiser.startAdvertising(settings, advertiseData, scanResponseData, callback)
     } catch (e: SecurityException) {
       promise.reject("PERMISSION_DENIED", e.message ?: "SecurityException while starting advertising", e)
     }
@@ -215,8 +190,6 @@ class BlePeripheralModule : Module() {
     }
 
     try {
-      // A second startGattServer() without a stop would orphan the first
-      // BluetoothGattServer handle (leaked slot). Close it first.
       gattServer?.close()
       gattServer = null
       connectedDevice = null
@@ -258,10 +231,7 @@ class BlePeripheralModule : Module() {
         promise.reject("GATT_SERVICE_FAILED", "Failed to queue the Offline Naira GATT service for registration.", null)
         return
       }
-      // NOT resolved here: addService only *queues* registration. Resolving
-      // now let JS start advertising before the service existed, so a
-      // central could connect and run service discovery against an empty
-      // GATT table. The promise is resolved in onServiceAdded below.
+
       mainHandler.postDelayed({
         if (pendingServiceAddPromise === promise) {
           pendingServiceAddPromise = null
@@ -293,7 +263,6 @@ class BlePeripheralModule : Module() {
       connectedDevice?.let { gattServer?.cancelConnection(it) }
       gattServer?.close()
     } catch (_: SecurityException) {
-      // best-effort cleanup when the module is being torn down
     }
     advertiser = null
     gattServer = null
@@ -301,11 +270,9 @@ class BlePeripheralModule : Module() {
     rejectPending("Module destroyed")
   }
 
-  // ---------- sending a notification (one already-framed chunk) ----------
+  // ---------- sending a notification ----------
 
-  @Suppress("DEPRECATION") // notifyCharacteristicChanged(device, char, confirm) is deprecated on API 33+
-  // in favor of an overload that takes the value directly, but this form still works down to
-  // minSdk and keeps one code path for all supported Android versions.
+  @Suppress("DEPRECATION")
   private fun notifyCharacteristicInternal(characteristicName: String, chunkJson: String, promise: Promise) {
     if (characteristicName != "TX_ACK") {
       promise.reject("UNSUPPORTED_CHARACTERISTIC", "Only TX_ACK is notify-capable on this GATT server.", null)
@@ -339,9 +306,6 @@ class BlePeripheralModule : Module() {
     }
 
     try {
-      // chunkJson is already a complete FramedChunk JSON string built by
-      // frameMessage() in ble-protocol.ts — set it as the raw GATT value
-      // verbatim, no re-parsing or re-encoding needed on this side.
       characteristic.value = chunkJson.toByteArray(Charsets.UTF_8)
       pendingNotifyPromise = promise
       val notified = server.notifyCharacteristicChanged(device, characteristic, false)
@@ -350,9 +314,7 @@ class BlePeripheralModule : Module() {
         promise.reject("NOTIFY_FAILED", "notifyCharacteristicChanged returned false.", null)
         return
       }
-      // Resolved in onNotificationSent. Firing the next chunk before the
-      // stack reports the previous one sent makes Android silently drop it —
-      // and a receipt is always 2+ chunks.
+
       mainHandler.postDelayed({
         if (pendingNotifyPromise === promise) {
           pendingNotifyPromise = null
@@ -393,9 +355,6 @@ class BlePeripheralModule : Module() {
     override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
       when (newState) {
         BluetoothProfile.STATE_CONNECTED -> {
-          // Prototype note: single active connection is tracked. Extend
-          // connectedDevice to a Set<BluetoothDevice> if you need this
-          // device to serve multiple centrals at once.
           connectedDevice = device
           sendEvent("onCentralConnected", mapOf("deviceAddress" to device.address))
         }
@@ -425,7 +384,6 @@ class BlePeripheralModule : Module() {
         try {
           gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
         } catch (_: SecurityException) {
-          // permission revoked mid-flight — nothing more we can do for this request
         }
       }
     }
@@ -446,19 +404,11 @@ class BlePeripheralModule : Module() {
         try {
           gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
         } catch (_: SecurityException) {
-          // ignore
         }
       }
     }
   }
 
-  /**
-   * The raw write value IS a FramedChunk JSON string (written verbatim by
-   * the central's writeMessage, which base64-decodes its own btoa()'d
-   * value en route — see chunkToBase64Payload/BleManager's write encoding
-   * in BleService.ts). Parse just enough to forward typed fields to JS;
-   * JS (MessageReassembler) does the actual reassembly across chunks.
-   */
   private fun emitIncomingChunk(rawValue: ByteArray) {
     try {
       val json = JSONObject(String(rawValue, Charsets.UTF_8))
@@ -471,11 +421,7 @@ class BlePeripheralModule : Module() {
           "payloadB64" to json.getString("payloadB64"),
         ),
       )
-    } catch (e: Exception) {
-      // Malformed chunk JSON — drop it rather than crash the GATT callback
-      // thread. A hardened build should log this to security_events (via
-      // an event back to JS) rather than silently swallowing it, since a
-      // malformed write could also be a probing attacker.
+    } catch (_: Exception) {
     }
   }
 }
