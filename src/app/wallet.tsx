@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Screen, Card, SectionLabel, PrimaryButton } from '../components/ui';
@@ -6,11 +6,14 @@ import { colors, spacing, typography } from '../theme/theme';
 import { koboToNairaString } from '../domain/money';
 import { getWalletSnapshot, OFFLINE_LIMITS } from '../services/WalletService';
 import { useDeviceIdentity } from '../services/useDeviceIdentity';
+import { requestBluetoothPermissions } from '../services/blePermissions';
+import MockBankModal from '../components/MockBankModal';
 
 export default function WalletScreen() {
   const { deviceId } = useDeviceIdentity();
   const [wallet, setWallet] = useState<Awaited<ReturnType<typeof getWalletSnapshot>> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isMockModalVisible, setIsMockModalVisible] = useState(false);
 
   const load = useCallback(() => {
     if (!deviceId) return;
@@ -19,6 +22,11 @@ export default function WalletScreen() {
       .then(setWallet)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load wallet'));
   }, [deviceId]);
+
+  // Request Bluetooth and Location permissions automatically on app startup
+  useEffect(() => {
+    requestBluetoothPermissions();
+  }, []);
 
   // Re-runs automatically every time the Wallet screen comes into focus
   useFocusEffect(
@@ -54,6 +62,14 @@ export default function WalletScreen() {
 
   return (
     <Screen>
+      {/* Mock Bank Top Up Button wrapped in a View */}
+      <View style={styles.topUpContainer}>
+        <PrimaryButton
+          label="+ Top Up ₦10,000 (Demo Funds)"
+          onPress={() => setIsMockModalVisible(true)}
+        />
+      </View>
+
       <Card>
         {rows.map(([label, value]) => (
           <View key={label} style={styles.row}>
@@ -82,11 +98,23 @@ export default function WalletScreen() {
         These caps bound offline risk until the next sync. Balances shown here are the device's
         local view — the backend ledger is the source of truth.
       </Text>
+
+      {/* Mock Bank Deposit Modal */}
+      <MockBankModal
+        visible={isMockModalVisible}
+        onClose={() => setIsMockModalVisible(false)}
+        onSuccess={() => {
+          load(); // Refresh wallet snapshot after successful mock deposit
+        }}
+      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  topUpContainer: {
+    marginBottom: spacing.md,
+  },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',

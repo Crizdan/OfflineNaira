@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Text, TextInput, View, StyleSheet, Alert } from 'react-native';
+import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import { Screen, Card, SectionLabel, PrimaryButton, StatusPill } from '../components/ui';
 import { colors, spacing, typography } from '../theme/theme';
 import { nairaToKobo } from '../domain/money';
@@ -8,8 +10,10 @@ import { PaymentEngine } from '../services/PaymentEngine';
 import { ble } from '../services/ble/bleInstance';
 import { WalletError } from '../services/WalletService';
 import { useTransactionAuthorization } from '../components/TransactionAuth';
+import { requestBluetoothPermissions } from '../services/blePermissions';
 
 export default function SendScreen() {
+  const router = useRouter();
   const { deviceId, publicKeyB64 } = useDeviceIdentity();
   const { authorize, pinPrompt } = useTransactionAuthorization();
   const [peerId, setPeerId] = useState('');
@@ -23,6 +27,16 @@ export default function SendScreen() {
       Alert.alert(
         'Wallet not ready',
         'Your device identity is still being set up. Please wait a moment and try again.'
+      );
+      return;
+    }
+
+    // Contextual Bluetooth and Location permission check on send tap
+    const permitted = await requestBluetoothPermissions();
+    if (!permitted) {
+      Alert.alert(
+        'Permissions required',
+        'Allow Bluetooth and Location access to send offline payments.'
       );
       return;
     }
@@ -66,11 +80,21 @@ export default function SendScreen() {
       const result = await engine.sendPayment(peerId.trim(), amountKobo);
       setStatus(result.finalState);
 
-      if (result.finalState !== 'CONFIRMED' && result.finalState !== 'COMMITTED') {
+      if (result.finalState === 'CONFIRMED' || result.finalState === 'COMMITTED') {
+        // Haptic feedback on success
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+        // Auto navigate back to wallet after 1.5 seconds
+        setTimeout(() => {
+          router.replace('/wallet');
+        }, 1500);
+      } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         Alert.alert('Send did not complete', result.failureReason ?? result.finalState);
       }
     } catch (err) {
       console.error('Send error:', err);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       if (err instanceof WalletError) {
         Alert.alert('Cannot send', err.message);
       } else {

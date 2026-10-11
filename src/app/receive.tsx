@@ -1,13 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Text, StyleSheet, Alert } from 'react-native';
+import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import { Screen, Card, SectionLabel } from '../components/ui';
 import { colors, spacing, typography } from '../theme/theme';
 import { useDeviceIdentity } from '../services/useDeviceIdentity';
 import { PaymentEngine } from '../services/PaymentEngine';
 import type { BleConnectionState } from '../services/ble/BleService';
 import { ble } from '../services/ble/bleInstance';
+import { requestBluetoothPermissions } from '../services/blePermissions';
 
 export default function ReceiveScreen() {
+  const router = useRouter();
   const { deviceId, publicKeyB64, offlineNairaId } = useDeviceIdentity();
   const [status, setStatus] = useState<BleConnectionState>('IDLE');
   const [ready, setReady] = useState(false);
@@ -28,11 +32,12 @@ export default function ReceiveScreen() {
         unsubState = ble.onStateChange(setStatus);
         const engine = new PaymentEngine(ble, deviceId, publicKeyB64);
 
-        const granted = await ble.requestPermissions();
+        // Contextual Bluetooth and Location permissions check
+        const granted = await requestBluetoothPermissions();
         if (!granted) {
           Alert.alert(
             'Bluetooth permissions required',
-            'Enable Bluetooth permissions in Settings to receive payments.'
+            'Enable Bluetooth and Location permissions in Settings to receive payments.'
           );
           return;
         }
@@ -43,12 +48,24 @@ export default function ReceiveScreen() {
         if (cancelled) return;
 
         unsubOffers = ble.subscribeToOffers((bytes) => {
-          engine.handleIncomingOffer(bytes, seenNonces).catch((err) => {
-            Alert.alert(
-              'Failed to process incoming payment',
-              err instanceof Error ? err.message : 'Unknown error'
-            );
-          });
+          engine
+            .handleIncomingOffer(bytes, seenNonces)
+            .then(() => {
+              // Haptic feedback on successful receive commit
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+              // Auto-navigate to wallet dashboard after 1.5 seconds
+              setTimeout(() => {
+                router.replace('/wallet');
+              }, 1500);
+            })
+            .catch((err) => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+              Alert.alert(
+                'Failed to process incoming payment',
+                err instanceof Error ? err.message : 'Unknown error'
+              );
+            });
         });
         setReady(true);
       } catch (err) {
