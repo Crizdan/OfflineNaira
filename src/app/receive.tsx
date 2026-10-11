@@ -32,7 +32,7 @@ export default function ReceiveScreen() {
         unsubState = ble.onStateChange(setStatus);
         const engine = new PaymentEngine(ble, deviceId, publicKeyB64);
 
-        // Contextual Bluetooth and Location permissions check
+        // 1. Strict contextual Bluetooth and Location permissions check
         const granted = await requestBluetoothPermissions();
         if (!granted) {
           Alert.alert(
@@ -42,7 +42,10 @@ export default function ReceiveScreen() {
           return;
         }
 
+        // 2. Wait until Bluetooth hardware is confirmed powered on
         await ble.waitForPoweredOn();
+
+        // 3. Start peripheral servers only AFTER permissions are explicitly granted
         await ble.startGattServer();
         await ble.startAdvertising();
         if (cancelled) return;
@@ -72,7 +75,7 @@ export default function ReceiveScreen() {
         console.warn('BLE Peripheral initialization failed:', err);
         Alert.alert(
           'BLE Not Ready',
-          'Could not start BLE receiver. Ensure Bluetooth is enabled and that the newly built APK is installed on this device.'
+          'Could not start BLE receiver. Ensure Bluetooth is enabled and location permission was granted.'
         );
       }
     })();

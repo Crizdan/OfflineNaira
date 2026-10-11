@@ -62,10 +62,10 @@ export default function WalletScreen() {
 
   return (
     <Screen>
-      {/* Mock Bank Top Up Button wrapped in a View */}
+      {/* Mock Bank Top Up Button */}
       <View style={styles.topUpContainer}>
         <PrimaryButton
-          label="+ Top Up ₦10,000 (Demo Funds)"
+          label="+ Top Up (Demo Bank Gateway)"
           onPress={() => setIsMockModalVisible(true)}
         />
       </View>
