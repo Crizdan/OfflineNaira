@@ -20,6 +20,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.util.Log
 import androidx.core.content.ContextCompat
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
@@ -45,6 +46,7 @@ class BlePeripheralModule : Module() {
     get() = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
 
   private var advertiser: BluetoothLeAdvertiser? = null
+  @Volatile private var advertiseCallback: AdvertiseCallback? = null
   private var gattServer: BluetoothGattServer? = null
   private var connectedDevice: BluetoothDevice? = null
   private var txAckNotificationsEnabled = false
@@ -58,6 +60,13 @@ class BlePeripheralModule : Module() {
     pendingServiceAddPromise = null
     pendingNotifyPromise?.reject("GATT_STOPPED", reason, null)
     pendingNotifyPromise = null
+  }
+
+  private fun stopAdvertisingQuietly() {
+    val cb = advertiseCallback ?: return
+    advertiseCallback = null
+    try { advertiser?.stopAdvertising(cb) }
+    catch (_: SecurityException) {} catch (t: Throwable) { Log.w("BlePeripheralModule", "stopAdvertising failed", t) }
   }
 
   override fun definition() = ModuleDefinition {
@@ -136,6 +145,8 @@ class BlePeripheralModule : Module() {
       .setIncludeDeviceName(true)
       .build()
 
+    stopAdvertisingQuietly()
+
     var resolved = false
     val callback = object : AdvertiseCallback() {
       override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
@@ -146,6 +157,7 @@ class BlePeripheralModule : Module() {
       }
 
       override fun onStartFailure(errorCode: Int) {
+        if (advertiseCallback === this) advertiseCallback = null
         sendEvent("onAdvertisingFailed", mapOf("errorCode" to errorCode))
         if (!resolved) {
           resolved = true
@@ -155,6 +167,7 @@ class BlePeripheralModule : Module() {
     }
 
     try {
+      advertiseCallback = callback
       // Use 4-parameter startAdvertising to ensure cross-chipset compatibility
       leAdvertiser.startAdvertising(settings, advertiseData, scanResponseData, callback)
     } catch (e: SecurityException) {
@@ -164,7 +177,7 @@ class BlePeripheralModule : Module() {
 
   private fun stopAdvertisingInternal(promise: Promise) {
     try {
-      advertiser?.stopAdvertising(object : AdvertiseCallback() {})
+      stopAdvertisingQuietly()
       promise.resolve(null)
     } catch (e: SecurityException) {
       promise.reject("PERMISSION_DENIED", e.message ?: "SecurityException while stopping advertising", e)
@@ -259,7 +272,7 @@ class BlePeripheralModule : Module() {
 
   private fun teardown() {
     try {
-      advertiser?.stopAdvertising(object : AdvertiseCallback() {})
+      stopAdvertisingQuietly()
       connectedDevice?.let { gattServer?.cancelConnection(it) }
       gattServer?.close()
     } catch (_: SecurityException) {

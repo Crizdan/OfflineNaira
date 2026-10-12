@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Text, View, StyleSheet, Modal, TextInput, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -13,11 +13,15 @@ export default function WalletScreen() {
   const { deviceId } = useDeviceIdentity();
   const [wallet, setWallet] = useState<Awaited<ReturnType<typeof getWalletSnapshot>> | null>(null);
   const [error, setError] = useState<string | null>(null);
- 
+
   // Modal states
   const [modalVisible, setModalVisible] = useState(false);
   const [amountInput, setAmountInput] = useState('2000');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    requestBluetoothPermissions().catch(() => {});
+  }, []);
 
   const load = useCallback(() => {
     if (!deviceId) return;
@@ -34,7 +38,10 @@ export default function WalletScreen() {
   );
 
   const handleDeposit = async () => {
-    const num = Number(amountInput);
+    // Strip commas and non-numeric characters so inputs like "2,000" parse correctly
+    const cleanAmount = amountInput.replace(/[^0-9.]/g, '');
+    const num = Number(cleanAmount);
+   
     if (!num || num <= 0 || !deviceId) {
       Alert.alert('Invalid amount', 'Please enter a valid number to fund.');
       return;
@@ -44,9 +51,9 @@ export default function WalletScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
 
     try {
-      const kobo = nairaToKobo(amountInput);
+      const kobo = nairaToKobo(cleanAmount);
       await depositOfflineFunds(deviceId, kobo);
-     
+    
       setLoading(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setModalVisible(false);
@@ -55,7 +62,7 @@ export default function WalletScreen() {
     } catch (err) {
       setLoading(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Error', 'Could not fund wallet.');
+      Alert.alert('Error', err instanceof Error ? err.message : 'Could not fund wallet.');
     }
   };
 

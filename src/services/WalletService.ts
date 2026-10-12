@@ -21,6 +21,7 @@ export type WalletErrorCode =
   | 'EXCEEDS_SINGLE_LIMIT'
   | 'EXCEEDS_DAILY_SEND_LIMIT'
   | 'EXCEEDS_DAILY_RECEIVE_LIMIT'
+  | 'INVALID_AMOUNT'
   | 'CONCURRENT_UPDATE_CONFLICT';
 
 export class WalletError extends Error {
@@ -135,6 +136,10 @@ export async function creditPendingReceive(deviceId: string, amount: Kobo): Prom
 
 /** Mock Bank Gateway: deposits custom demo funds directly into the offline wallet. */
 export async function depositOfflineFunds(deviceId: string, amount: Kobo): Promise<void> {
+  if (amount <= 0) {
+    throw new WalletError('INVALID_AMOUNT', 'Deposit amount must be greater than zero');
+  }
+
   for (let attempt = 0; attempt < 3; attempt++) {
     const wallet = await WalletRepo.getWallet(deviceId);
     if (!wallet) throw new WalletError('WALLET_NOT_INITIALIZED', 'Wallet not initialized');
