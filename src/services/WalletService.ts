@@ -1,9 +1,9 @@
 /**
- * WalletService is the single choke point for every balance change in the
- * app. Screens and components call methods on this service and get back a
- * result — there is no exported function anywhere that lets a component
- * write to the `wallet` table directly.
- */
+* WalletService is the single choke point for every balance change in the
+* app. Screens and components call methods on this service and get back a
+* result — there is no exported function anywhere that lets a component
+* write to the `wallet` table directly.
+*/
 import * as WalletRepo from '../db/walletRepository';
 import { Kobo, kobo, addKobo, subKobo } from '../domain/money';
 
@@ -48,11 +48,11 @@ function rollDailyWindowIfNeeded(wallet: WalletRepo.WalletRow): {
 }
 
 /**
- * Step 1 of a send: reserve funds against the offline wallet. This moves
- * money from `offlineWalletKobo` into `reservedKobo` — it does NOT
- * subtract it entirely, so a failed/rejected send can be released back.
- * Retries once on optimistic-concurrency conflict.
- */
+* Step 1 of a send: reserve funds against the offline wallet. This moves
+* money from `offlineWalletKobo` into `reservedKobo` — it does NOT
+* subtract it entirely, so a failed/rejected send can be released back.
+* Retries once on optimistic-concurrency conflict.
+*/
 export async function reserveForSend(deviceId: string, amount: Kobo): Promise<void> {
   if (amount > OFFLINE_LIMITS.maxSingleSendKobo) {
     throw new WalletError('EXCEEDS_SINGLE_LIMIT', 'Amount exceeds per-transaction offline limit');
@@ -81,7 +81,6 @@ export async function reserveForSend(deviceId: string, amount: Kobo): Promise<vo
       dailyWindowStart,
     });
     if (ok) return;
-    // else: someone else touched the wallet between read and write — retry
   }
   throw new WalletError('CONCURRENT_UPDATE_CONFLICT', 'Could not reserve funds after retries');
 }
@@ -124,10 +123,6 @@ export async function creditPendingReceive(deviceId: string, amount: Kobo): Prom
       throw new WalletError('EXCEEDS_DAILY_RECEIVE_LIMIT', 'Daily offline receive limit reached');
     }
 
-    // Credited into offlineWalletKobo optimistically so the receiver can see
-    // and even re-spend it locally, but it is flagged PENDING_RECONCILIATION
-    // at the transaction level until the backend settles it during sync —
-    // see docs/LIMITATIONS.md for why this is a bounded risk, not zero risk.
     const ok = await WalletRepo.applyWalletUpdate(deviceId, wallet.version, {
       offlineWalletKobo: addKobo(wallet.offlineWalletKobo, amount),
       dailyReceivedKobo: addKobo(dailyReceivedKobo, amount),
@@ -136,6 +131,20 @@ export async function creditPendingReceive(deviceId: string, amount: Kobo): Prom
     if (ok) return;
   }
   throw new WalletError('CONCURRENT_UPDATE_CONFLICT', 'Could not credit pending receive');
+}
+
+/** Mock Bank Gateway: deposits custom demo funds directly into the offline wallet. */
+export async function depositOfflineFunds(deviceId: string, amount: Kobo): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const wallet = await WalletRepo.getWallet(deviceId);
+    if (!wallet) throw new WalletError('WALLET_NOT_INITIALIZED', 'Wallet not initialized');
+
+    const ok = await WalletRepo.applyWalletUpdate(deviceId, wallet.version, {
+      offlineWalletKobo: addKobo(wallet.offlineWalletKobo, amount),
+    });
+    if (ok) return;
+  }
+  throw new WalletError('CONCURRENT_UPDATE_CONFLICT', 'Could not deposit mock funds');
 }
 
 /** Called after a successful backend sync to overwrite local state with the ledger truth. */

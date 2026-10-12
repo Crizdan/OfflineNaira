@@ -16,8 +16,7 @@ export default function ReceiveScreen() {
   const [status, setStatus] = useState<BleConnectionState>('IDLE');
   const [ready, setReady] = useState(false);
 
-  // In-memory replay cache for this session — validateSignedTransaction
-  // checks incoming nonces against this Set.
+  // In-memory replay cache for this session
   const seenNonces = useRef(new Set<string>()).current;
 
   useEffect(() => {
@@ -32,32 +31,33 @@ export default function ReceiveScreen() {
         unsubState = ble.onStateChange(setStatus);
         const engine = new PaymentEngine(ble, deviceId, publicKeyB64);
 
-        // 1. Strict contextual Bluetooth and Location permissions check
-        const granted = await requestBluetoothPermissions();
+        // 1. Strict permission check — abort safely if denied
+        const granted = await requestBluetoothPermissions().catch(() => false);
         if (!granted) {
-          Alert.alert(
-            'Bluetooth permissions required',
-            'Enable Bluetooth and Location permissions in Settings to receive payments.'
-          );
+          if (!cancelled) {
+            Alert.alert(
+              'Permissions Required',
+              'Bluetooth and Location permissions are required to receive offline payments.'
+            );
+          }
           return;
         }
 
-        // 2. Wait until Bluetooth hardware is confirmed powered on
-        await ble.waitForPoweredOn();
-
-        // 3. Start peripheral servers only AFTER permissions are explicitly granted
-        await ble.startGattServer();
-        await ble.startAdvertising();
         if (cancelled) return;
 
+        // 2. Initialize hardware and BLE servers
+        await ble.waitForPoweredOn();
+        await ble.startGattServer();
+        await ble.startAdvertising();
+       
+        if (cancelled) return;
+
+        // 3. Subscribe to incoming payment offers from sender phones
         unsubOffers = ble.subscribeToOffers((bytes) => {
           engine
             .handleIncomingOffer(bytes, seenNonces)
             .then(() => {
-              // Haptic feedback on successful receive commit
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-              // Auto-navigate to wallet dashboard after 1.5 seconds
               setTimeout(() => {
                 router.replace('/wallet');
               }, 1500);
@@ -73,10 +73,12 @@ export default function ReceiveScreen() {
         setReady(true);
       } catch (err) {
         console.warn('BLE Peripheral initialization failed:', err);
-        Alert.alert(
-          'BLE Not Ready',
-          'Could not start BLE receiver. Ensure Bluetooth is enabled and location permission was granted.'
-        );
+        if (!cancelled) {
+          Alert.alert(
+            'BLE Not Ready',
+            'Could not start BLE receiver. Ensure Bluetooth is enabled.'
+          );
+        }
       }
     })();
 
